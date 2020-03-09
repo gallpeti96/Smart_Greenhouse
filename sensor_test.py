@@ -1,4 +1,5 @@
 import database
+import SIMCOM7000E
 import time
 import threading
 import board
@@ -6,12 +7,19 @@ from busio import I2C
 import adafruit_bme680
 import adafruit_tsl2591
 import paho.mqtt.client as mqtt
+import netifaces as ni
+
 
 client = mqtt.Client("test")
-client.connect("152.66.248.149", port=51883, keepalive=600)
+if "ppp0" in ni.interfaces():
+    ip = ni.ifaddresses('ppp0')[ni.AF_INET][0]['addr']                              # nb-iot modemen át
+    client.connect("152.66.248.149", port=51883, keepalive=600, bind_address=ip)
+else:
+    client.connect("152.66.248.149", port=51883, keepalive=600)                         # alapértelmezett gw
 
 i2c = I2C(board.SCL, board.SDA)
 conn = database.create_db("test.sqlite")
+
 
 def gas_warmup(bme680, warmup_time):
     start_time = time.time()
@@ -95,6 +103,26 @@ def tsl():
         time.sleep(2)
 
 
+def GPS():
+    modem = SIMCOM7000E.serial_connect("/dev/ttyUSB2")
+    SIMCOM7000E.gnss_poweron(modem)
+    gps_dict = SIMCOM7000E.get_gnss_data(modem)
+    print("Waiting for position", end=" ")
+    while gps_dict['Fix status'] == '0':
+        print(".", end = " ")
+        time.sleep(2)
+        gps_dict = SIMCOM7000E.get_gnss_data(modem)
+    print("Positioned!")
+    while True:
+        gps_dict = SIMCOM7000E.get_gnss_data(modem)
+        lat, long = gps_dict["Latitude"], gps_dict["Longitude"]
+        position = lat + ", " + long
+        database.create_record(conn, "Measurements", ("lux", position))
+        client.publish("greenhouse/gps", position)
+        print(lat, "\t", long)
+        time.sleep(2)
+
+
 def main():
     print("starting....")
     try:
@@ -102,9 +130,12 @@ def main():
         sensor1.daemon = True
         sensor2 = threading.Thread(target=tsl)
         sensor2.daemon = True
+        sensor3 = threading.Thread(target=GPS)
+        sensor3.daemon = True
 
         sensor1.start()
         sensor2.start()
+        sensor3.start()
         print("started")
         while True:
             time.sleep(1)
@@ -114,3 +145,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# test

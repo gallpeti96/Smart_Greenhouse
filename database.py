@@ -3,7 +3,7 @@ from datetime import datetime
 
 def create_connection(db_file):
     conn = None
-    conn = sqlite3.connect(db_file, check_same_thread=False)
+    conn = sqlite3.connect(db_file, check_same_thread=False)    # each thread needs to add new rows
     print("sqlite version: ", sqlite3.version)
 
     return conn

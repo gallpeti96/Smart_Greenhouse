@@ -5,7 +5,7 @@ import sys
 
 def serial_connect(port):
     print("Connecting to modem on port: ", port)
-    ser = serial.Serial(port, 115200, xonxoff=True, rtscts=True)
+    ser = serial.Serial(port, 115200, xonxoff=True, rtscts=True, dsrdtr=True)
     ser.flushInput()
     time.sleep(1)
     print("Modem connected!")
@@ -27,16 +27,16 @@ def send_at(ser, command, back, timeout=1):
     if ser.inWaiting():
         time.sleep(0.01)
         rec_buff = ser.read(ser.inWaiting())
-        rec_buff = rec_buff.decode().replace('\r','')
+        rec_buff = rec_buff.decode().replace('\r', '')
     if rec_buff != '':
-        if back not in rec_buff:
-            print(command + ' ERROR', file=sys.stderr)
-            print(command + ' back:\t' + rec_buff, file=sys.stderr)
-        else:
-            print(rec_buff, file=sys.stderr)
+        #     if back not in rec_buff:
+        #         print(command + ' ERROR', file=sys.stderr)
+        #         print(command + ' back:\t' + rec_buff, file=sys.stderr)
+        #     else:
+        #         print(rec_buff, file=sys.stderr)
         return rec_buff
     else:
-        print('ERROR', file=sys.stderr)
+        #     print('ERROR', file=sys.stderr)
         return 0
 
 
@@ -46,7 +46,6 @@ def gnss_poweron(ser):
 
     print("GNSS power on")
     sys.stdout.flush()
-
 
 
 def gnss_poweroff(ser):
@@ -84,25 +83,28 @@ def get_gnss_data(ser):
                 "HPA": splitted[19],
                 "VPA": splitted[20]
                 }
-    print("{:<25} {:<50} ".format('Parameter', 'Value'))
-    for k, v in gps_dict.items():
-        parameter = v
-        print("{:<25} {:<50} ".format(k, parameter))
-    print()
+    # print("{:<25} {:<50} ".format('Parameter', 'Value'))
+    # for k, v in gps_dict.items():
+    #    parameter = v
+    #   print("{:<25} {:<50} ".format(k, parameter))
     sys.stdout.flush()
+    return gps_dict
 
-def set_APN(ser,APN):
-    answer = send_at(ser,'AT+CSTT?', "OK")
+
+def set_APN(ser, APN):
+    answer = send_at(ser, 'AT+CSTT?', "OK")
     if APN.replace('"', "") in answer:
         print("APN is already set up")
     else:
-        send_at(ser, 'AT+CSTT='+APN, "OK")
+        send_at(ser, 'AT+CSTT=' + APN, "OK")
         print("APN set to:", APN)
     sys.stdout.flush()
 
+
 def set_APN_conf_mode(ser, mode):
-    send_at(ser, 'AT+CAPNMODE='+str(mode), "OK")
+    send_at(ser, 'AT+CAPNMODE=' + str(mode), "OK")
     sys.stdout.flush()
+
 
 def activate_network(ser):
     answer = send_at(ser, 'AT+CNACT?', "OK")
@@ -114,15 +116,17 @@ def activate_network(ser):
         print("Network activated")
     sys.stdout.flush()
 
+
 def get_MQTT_config(ser):
     send_at(ser, 'AT+SMCONF?', "OK")
 
 
 def config_MQTT(ser, broker, id):
-    #send_at(ser, 'AT+SMCONF="CLIENTID",'+id, "OK")
-    send_at(ser, 'AT+SMCONF="URL",'+broker, "OK")
+    # send_at(ser, 'AT+SMCONF="CLIENTID",'+id, "OK")
+    send_at(ser, 'AT+SMCONF="URL",' + broker, "OK")
     print("MQTT configured")
     sys.stdout.flush()
+
 
 def connect_MQTT(ser):
     print("Connecting to MQTT broker . . . ", end=" ")
@@ -134,7 +138,8 @@ def connect_MQTT(ser):
         answer = send_at(ser, "AT+SMCONN", "OK", timeout=10)
     print("connected")
 
+
 def send_MQTT(ser, topic, message):
-    length=len(message)+1
-    send_at(ser, 'AT+SMPUB='+topic + "," +str(length) +",1,1", "OK")
-    send_at(ser,message,"OK")
+    length = len(message) + 1
+    send_at(ser, 'AT+SMPUB=' + topic + "," + str(length) + ",1,1", "OK")
+    send_at(ser, message, "OK")
