@@ -93,3 +93,5 @@ while True:
     print(temp, humidity, pressure, altitude, air_quality_score, lux)
 
     time.sleep(1)
+
+# test
