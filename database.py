@@ -1,6 +1,7 @@
 import sqlite3
 from datetime import datetime
 
+
 def create_connection(db_file):
     conn = None
     conn = sqlite3.connect(db_file, check_same_thread=False)    # each thread needs to add new rows
@@ -16,11 +17,11 @@ def create_table(conn, create_table_sql):
 
 def create_record(conn, table, data):
     time = (datetime.now(),)
-    data = time + data
     if table == 'Measurements':
+        data = time + data
         sql = ''' INSERT INTO Measurements(timestamp, sensorID, SensorValue) VALUES(?,?,?) '''
     elif table == 'Communications':
-        sql = ''' INSERT INTO Communications(timestamp, LastSent, LastReceived) VALUES(datetime.now(),?,?) '''
+        sql = ''' INSERT INTO Communications(meas_timestamp, sent_timestamp) VALUES(?,?) '''
     else:
         print("wrong table name!")
 
@@ -28,6 +29,20 @@ def create_record(conn, table, data):
     cur.execute(sql, data)
     conn.commit()
     return cur.lastrowid
+
+
+def select_last_entry(conn):
+    sql = '''SELECT max(id) from Communications '''
+    cur = conn.cursor()
+    cur.execute(sql)
+    return cur.fetchall()
+
+
+def get_not_sends(conn, last):
+    sql = '''SELECT * FROM Measurements WHERE id > ''' + last
+    cur = conn.cursor()
+    cur.execute(sql)
+    return cur.fetchall()
 
 def create_db(name):
     database = r"/home/pi/db/"+name
@@ -41,11 +56,9 @@ def create_db(name):
 
     sql_create_communications_table = """CREATE TABLE IF NOT EXISTS Communications (
                                     id integer PRIMARY KEY,
-                                    timestamp DATETIME,
-                                    LastSent integer,
-                                    LastReceived integer,
-                                    FOREIGN KEY (LastSent) REFERENCES Measurements (id)
-                                    FOREIGN KEY (LastReceived) REFERENCES Measurements (id)
+                                    meas_timestamp DATETIME,
+                                    sent_timestamp DATETIME,
+                                    FOREIGN KEY (meas_timestamp) REFERENCES Measurements (timestamp)
                                 );"""
 
     conn = create_connection(database)
