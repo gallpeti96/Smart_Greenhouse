@@ -8,18 +8,18 @@ def serial_connect(port):
     ser = serial.Serial(port, 115200, xonxoff=True, rtscts=True, dsrdtr=True)
     ser.flushInput()
     time.sleep(1)
-    print("Modem connected!")
+    print("Modem connected to send AT!")
     sys.stdout.flush()
     return ser
 
 
 def serial_disconnect(ser):
     ser.close()
-    print("Modem disconnected.")
+    print("Modem disconnected from AT port.")
     sys.stdout.flush()
 
 
-def send_at(ser, command, back, timeout=1):
+def send_at(ser, command, back, timeout=2.0):
     rec_buff = ''
     ser.write((command + '\r').encode())
     # print(command, file=sys.stderr)
@@ -38,6 +38,14 @@ def send_at(ser, command, back, timeout=1):
     else:
         #     print('ERROR', file=sys.stderr)
         return 0
+
+
+def set_CFUN(ser, input):
+    return send_at(ser, 'AT+CFUN='+input, 'OK', 3.0)
+
+
+def get_conn_status(ser):
+    return send_at(ser, 'AT+CGATT?', 'OK', 0.5)
 
 
 def gnss_poweron(ser):
