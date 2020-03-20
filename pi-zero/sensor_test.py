@@ -2,6 +2,7 @@ import database
 import SIMCOM7000E
 import time
 import threading
+import sys
 import board
 from busio import I2C
 import adafruit_bme680
@@ -13,7 +14,7 @@ import RPi.GPIO as GPIO
 from datetime import datetime
 import json
 import subprocess
-import sys
+from termcolor import colored
 
 client = mqtt.Client("test")
 # if "ppp0" in ni.interfaces():
@@ -32,7 +33,8 @@ conn = database.create_db("test.sqlite")
 GPIO.setmode(GPIO.BCM)
 relay_GPIO = 26
 GPIO.setup(relay_GPIO, GPIO.OUT)
-
+measurement_interval = 1
+lock = threading.Lock()
 
 def gas_warmup(bme680, warmup_time):
     start_time = time.time()
@@ -56,26 +58,27 @@ def gas_warmup(bme680, warmup_time):
 
 
 def bme680():
+    print(colored("BME680 started. . .", 'green'))
     bme680 = adafruit_bme680.Adafruit_BME680_I2C(i2c, debug=False)
     bme680.sea_level_pressure = 101325 / 100
     gas_baseline, hum_baseline, hum_weighting = gas_warmup(bme680, 0)
-
     while True:
         temp = round(bme680.temperature, 2)
-        database.create_record(conn, "Measurements", ("temp", temp))
-        # client.publish("greenhouse/temperature", temp)
-
         humidity = round(bme680.humidity, 2)
-        database.create_record(conn, "Measurements", ("humidity", humidity))
-        # client.publish("greenhouse/humidity", humidity)
-
         pressure = round(bme680.pressure, 2)
-        database.create_record(conn, "Measurements", ("pressure", pressure))
-        # client.publish("greenhouse/pressure", pressure)
-
         altitude = round(bme680.altitude, 2)
-        database.create_record(conn, "Measurements", ("altitude", altitude))
-        # client.publish("greenhouse/altitude", altitude)
+        with lock:
+            database.create_record(conn, "Measurements", ("temp", temp))
+            # client.publish("greenhouse/temperature", temp)
+
+            database.create_record(conn, "Measurements", ("humidity", humidity))
+            # client.publish("greenhouse/humidity", humidity)
+
+            database.create_record(conn, "Measurements", ("pressure", pressure))
+            # client.publish("greenhouse/pressure", pressure)
+
+            database.create_record(conn, "Measurements", ("altitude", altitude))
+            # client.publish("greenhouse/altitude", altitude)
 
         gas = bme680.gas
         gas_offset = gas_baseline - gas
@@ -98,35 +101,41 @@ def bme680():
             gas_score = 100 - (hum_weighting * 100)
         # Calculate air_quality_score.
         air_quality_score = round(hum_score + gas_score, 2)
+        with lock:
+            database.create_record(conn, "Measurements", ("gas", air_quality_score))
+            # client.publish("greenhouse/gas", air_quality_score)
 
-        database.create_record(conn, "Measurements", ("gas", air_quality_score))
-        # client.publish("greenhouse/gas", air_quality_score)
-
-        # print(temp, "°C, ", hum, "%, ", pressure, "hPa, ", altitude, "m, ", air_quality_score)
-        time.sleep(2)
+            # print(temp, "°C, ", hum, "%, ", pressure, "hPa, ", altitude, "m, ", air_quality_score)
+        time.sleep(measurement_interval)
 
 
 def tsl():
+    print(colored("TSL2591 started. . .", 'green'))
     tsl = adafruit_tsl2591.TSL2591(i2c)
     while True:
         lux = round(tsl.lux, 2)
-        database.create_record(conn, "Measurements", ("lux", lux))
+        with lock:
+            database.create_record(conn, "Measurements", ("lux", lux))
         # client.publish("greenhouse/lux", lux)
         # print(lux, " lux")
-        time.sleep(2)
+        time.sleep(measurement_interval)
 
 
 def power():
+    print(colored("INA219 started. . .", 'green'))
     ina219 = INA219(i2c)
+
     while True:
         power = round(ina219.power, 4)
-        database.create_record(conn, "Measurements", ("power", power))
+        with lock:
+            database.create_record(conn, "Measurements", ("power", power))
         # client.publish("greenhouse/power", power)
         # print(power, " Watt")
-        time.sleep(2)
+        time.sleep(measurement_interval/10)
 
 
 def GPS():
+    print(colored("GPS positioning started. . .", 'green'))
     modem = SIMCOM7000E.serial_connect("/dev/ttyUSB2")
     SIMCOM7000E.gnss_poweron(modem)
     gps_dict = SIMCOM7000E.get_gnss_data(modem)
@@ -143,12 +152,13 @@ def GPS():
         database.create_record(conn, "Measurements", ("gps", position))
         # client.publish("greenhouse/gps", position)
         # print(lat, "\t", long)
-        time.sleep(2)
+        time.sleep(measurement_interval)
 
 
 def get_action():
     client.subscribe("greenhouse/relay")
-    print("Subscripted to topic")
+    print(colored("Subscripted to topic: " + "greenhouse/relay" , 'green'))
+
     def on_message(client, userdata, message):
         print("message received ", str(message.payload.decode("utf-8")))
         print("message topic=", message.topic)
@@ -165,13 +175,37 @@ def get_action():
 
 def send_msg():
     temp_dict = {}
+    temp_dict["timestamp"] = []
+    temp_dict["value"] = []
+
     humidity_dict = {}
+    humidity_dict["timestamp"] = []
+    humidity_dict["value"] = []
+
     pressure_dict = {}
+    pressure_dict["timestamp"] = []
+    pressure_dict["value"] = []
+
     altitude_dict = {}
+    altitude_dict["timestamp"] = []
+    altitude_dict["value"] = []
+
     gas_dict = {}
+    gas_dict["timestamp"] = []
+    gas_dict["value"] = []
+
     light_dict = {}
+    light_dict["timestamp"] = []
+    light_dict["value"] = []
+
     pos_dict = {}
+    pos_dict["timestamp"] = []
+    pos_dict["value"] = []
+
     power_dict = {}
+    power_dict["timestamp"] = []
+    power_dict["value"] = []
+
     last_sent = database.select_last_entry(conn)
     if last_sent[0][0] is None:
         last_sent = "0"
@@ -180,53 +214,83 @@ def send_msg():
     not_sent = database.get_not_sends(conn, last_sent)
     for i in range(0, len(not_sent)):
         if not_sent[i][2] == 'temp':
-            temp_dict[not_sent[i][1]] = not_sent[i][3]
+            temp_dict['timestamp'].append(not_sent[i][1])
+            temp_dict['value'].append(not_sent[i][3])
         elif not_sent[i][2] == 'humidity':
-            humidity_dict[not_sent[i][1]] = not_sent[i][3]
+            humidity_dict['timestamp'].append(not_sent[i][1])
+            humidity_dict['value'].append(not_sent[i][3])
         elif not_sent[i][2] == 'pressure':
-            pressure_dict[not_sent[i][1]] = not_sent[i][3]
+            pressure_dict['timestamp'].append(not_sent[i][1])
+            pressure_dict['value'].append(not_sent[i][3])
         elif not_sent[i][2] == 'altitude':
-            altitude_dict[not_sent[i][1]] = not_sent[i][3]
+            altitude_dict['timestamp'].append(not_sent[i][1])
+            altitude_dict['value'].append(not_sent[i][3])
         elif not_sent[i][2] == 'gas':
-            gas_dict[not_sent[i][1]] = not_sent[i][3]
+            gas_dict['timestamp'].append(not_sent[i][1])
+            gas_dict['value'].append(not_sent[i][3])
         elif not_sent[i][2] == 'lux':
-            light_dict[not_sent[i][1]] = not_sent[i][3]
+            light_dict['timestamp'].append(not_sent[i][1])
+            light_dict['value'].append(not_sent[i][3])
         if not_sent[i][2] == 'pos':
-            pos_dict[not_sent[i][1]] = not_sent[i][3]
+            pos_dict['timestamp'].append(not_sent[i][1])
+            pos_dict['value'].append(not_sent[i][3])
         if not_sent[i][2] == 'power':
-            power_dict[not_sent[i][1]] = not_sent[i][3]
+            power_dict['timestamp'].append(not_sent[i][1])
+            power_dict['value'].append(not_sent[i][3])
 
     client.publish("greenhouse/temp_json", json.dumps(temp_dict))
+    time.sleep(.2)
     client.publish("greenhouse/humidity_json", json.dumps(humidity_dict))
+    time.sleep(.2)
     client.publish("greenhouse/pressure_json", json.dumps(pressure_dict))
+    time.sleep(.2)
     client.publish("greenhouse/altitude_json", json.dumps(altitude_dict))
+    time.sleep(.2)
     client.publish("greenhouse/gas_json", json.dumps(gas_dict))
+    time.sleep(.2)
     client.publish("greenhouse/lux_json", json.dumps(light_dict))
+    time.sleep(.2)
     client.publish("greenhouse/pos_json", json.dumps(pos_dict))
+    time.sleep(.2)
     client.publish("greenhouse/power_json", json.dumps(power_dict))
-    print("Sent:\t", len(temp_dict), "temp", len(humidity_dict), "humi", len(pressure_dict), "pressure", len(gas_dict), "gas", len(light_dict), "light", len(pos_dict), "pos", len(power_dict), "power")
-    timestamp = datetime.now()
-    for i in range(0, len(not_sent)):
-        database.create_record(conn, "Communications", (not_sent[i][1], timestamp))
+    print("Sent:\t", len(temp_dict['timestamp']), "temp", len(humidity_dict['timestamp']), "humi", len(pressure_dict['timestamp']), "pressure", len(gas_dict['timestamp']), "gas", len(light_dict['timestamp']), "light", len(pos_dict['timestamp']), "pos", len(power_dict['timestamp']), "power")
+    timestamp = time.time()
+    start = time.time()
+    with lock:
+        database.create_record(conn, "Communications", (not_sent, timestamp))
+    stop = time.time()
+    print("logged in ", stop-start, "seconds")
 
 
 def connect_to_network_and_send(sleep_sec):
+    print(colored("Communication thread started. . .", 'green'))
     while True:
         try:
             modem = SIMCOM7000E.serial_connect("/dev/ttyUSB3")
         except:
-            print("exit and connect a modem first")
-             # ide kene valami amivel az egesz programot kinyirja, nem csak ezt a threadet !!!
+            print(colored("exit and connect a modem first", 'red'))
+            sys.exit(0)
         back = SIMCOM7000E.set_CFUN(modem, '1')
         print(back)
         connected = 0
+        try_number = 0
         while connected == 0:
             time.sleep(.1)
             back = SIMCOM7000E.get_conn_status(modem)
-            print(back)
+            # print(back)
             if '1' in back:
                 connected = 1
+                print("\rTried to connect to network:", try_number+1, "times")
                 print("connected to network")
+            else:
+                try_number += 1
+                print("\rTried to connect to network:", try_number, "times", end="")
+            if try_number == 30:
+                print(colored("cannot connect to the network, restarting communication thread", 'red'))
+                back = SIMCOM7000E.set_CFUN(modem, '0')
+                print(back)
+                SIMCOM7000E.serial_disconnect(modem)
+                sys.exit(0)
         SIMCOM7000E.serial_disconnect(modem)
         time.sleep(1)
 
@@ -234,19 +298,26 @@ def connect_to_network_and_send(sleep_sec):
         process = subprocess.Popen(bashCommand.split(), stderr=subprocess.PIPE, stdout=subprocess.PIPE)
         output, error = process.communicate()
         print(output)
+        time.sleep(1)
         process1 = subprocess.Popen(['ip', 'a'], stderr=subprocess.PIPE, stdout=subprocess.PIPE)
         output1, error1 = process1.communicate()
         if b"Connection terminated." in output or b'unrecognized option' in output:
             print("ajaj")
-            raise KeyboardInterrupt
+            process3 = subprocess.Popen(['sudo', 'poff'], stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+            output3, error3 = process1.communicate()
+            print(output3, error3)
+            sys.exit(0)
         elif b'ppp0' not in output1:
             print("jajajj")
-            raise KeyboardInterrupt
+            process3 = subprocess.Popen(['sudo', 'poff'], stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+            output3, error3 = process1.communicate()
+            print(output3, error3)
+            sys.exit(0)
         else:
-            print("connceted to nbiot")
-
+            print(colored("Connected to NB-IoT network", 'green', attrs=['bold']))
+        time.sleep(1)
         ip = ni.ifaddresses('ppp0')[ni.AF_INET][0]['addr']  # nb-iot modemen át
-        client.connect("152.66.248.149", port=51883, keepalive=600, bind_address=ip)
+        client.connect("152.66.248.149", port=51883, keepalive=60, bind_address=ip)
         client.loop_start()
         get_action()
         print("connected using NB-IoT")
@@ -260,17 +331,18 @@ def connect_to_network_and_send(sleep_sec):
         bashCommand = "sudo poff"
         process = subprocess.Popen(bashCommand.split(), stderr=subprocess.PIPE, stdout=subprocess.PIPE)
         output, error = process.communicate()
-        print("ppp killed")
+        time.sleep(2)
+        print(colored("PPP stopped", 'yellow'))
         modem = SIMCOM7000E.serial_connect("/dev/ttyUSB3")
         back = SIMCOM7000E.set_CFUN(modem, '0')
         print(back)
         SIMCOM7000E.serial_disconnect(modem)
-        print("Going to sleep for: ", sleep_sec, "seconds")
+        print(colored("Going to sleep for: " + str(sleep_sec) + "seconds", 'magenta'))
         time.sleep(sleep_sec)
 
 
 def main():
-    print("starting....")
+    print(colored("STARTING....", 'green'))
     try:
         sensor1 = threading.Thread(target=bme680)
         sensor1.name = "bme680"
@@ -302,11 +374,38 @@ def main():
         sensor4.start()
         # rel.start()
         connect_and_send.start()
-        print("started")
-        threading.Lock()
         while True:
-            time.sleep(1)
+            time.sleep(5)
+
+            if not sensor1.is_alive():
+                sensor1 = None
+                sensor1 = threading.Thread(target=bme680)
+                sensor1.name = "bme680"
+                sensor1.daemon = True
+                sensor1.start()
+            elif not sensor2.is_alive():
+                sensor2 = None
+                sensor2 = threading.Thread(target=tsl)
+                sensor2.name = 'tsl'
+                sensor2.daemon = True
+                sensor2.start()
+            elif not sensor4.is_alive():
+                sensor4 = None
+                sensor4 = threading.Thread(target=power)
+                sensor4.name = 'power'
+                sensor4.daemon = True
+                sensor4.start()
+            elif not connect_and_send.is_alive():
+                print('restarting communication thread')
+                connect_and_send = None
+                time.sleep(5)
+                connect_and_send = threading.Thread(target=connect_to_network_and_send, args=(30,))
+                connect_and_send.name = 'Communication'
+                connect_and_send.daemon = True
+                connect_and_send.start()
+
     except KeyboardInterrupt:
+        client.unsubscribe("greenhouse/relay")
         client.disconnect()
         GPIO.cleanup()
         print("killing everything 💀")

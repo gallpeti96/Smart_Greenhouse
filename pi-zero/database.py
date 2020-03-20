@@ -1,6 +1,6 @@
 import sqlite3
 from datetime import datetime
-
+import threading
 
 def create_connection(db_file):
     conn = None
@@ -19,14 +19,22 @@ def create_record(conn, table, data):
     time = (datetime.now(),)
     if table == 'Measurements':
         data = time + data
-        sql = ''' INSERT INTO Measurements(timestamp, sensorID, SensorValue) VALUES(?,?,?) '''
+        sql = '''INSERT INTO Measurements(timestamp, sensorID, SensorValue) VALUES(?,?,?) '''
+        cur = conn.cursor()
+        cur.execute(sql, data)
     elif table == 'Communications':
-        sql = ''' INSERT INTO Communications(meas_timestamp, sent_timestamp) VALUES(?,?) '''
+        to_log = []
+        not_sent = data[0]
+        timestamp = data[1]
+        sql = '''INSERT INTO Communications(meas_timestamp, sent_timestamp) VALUES(?,?)'''
+        for i in range(0, len(not_sent)):
+            to_log.append((not_sent[i][1], timestamp))
+        cur = conn.cursor()
+        cur.executemany(sql, to_log)
+
     else:
         print("wrong table name!")
 
-    cur = conn.cursor()
-    cur.execute(sql, data)
     conn.commit()
     return cur.lastrowid
 
