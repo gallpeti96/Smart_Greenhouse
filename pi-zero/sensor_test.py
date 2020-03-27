@@ -308,7 +308,7 @@ def connect_to_network_and_send(sleep_sec):
         process1 = subprocess.Popen(['ip', 'a'], stderr=subprocess.PIPE, stdout=subprocess.PIPE)
         output1, error1 = process1.communicate()
         if b"Connection terminated." in output or b'unrecognized option' in output:
-            print("ajaj a cica elment")
+            print("ajaj")
             process3 = subprocess.Popen(['sudo', 'poff'], stderr=subprocess.PIPE, stdout=subprocess.PIPE)
             output3, error3 = process1.communicate()
             print(output3, error3)
@@ -401,7 +401,6 @@ def main():
                 sensor4.start()
             elif not connect_and_send.is_alive():
                 print('restarting communication thread')
-                print('szerinvan hihi')
                 connect_and_send = None
                 time.sleep(5)
                 connect_and_send = threading.Thread(target=connect_to_network_and_send, args=(30,))
@@ -414,7 +413,7 @@ def main():
         client.disconnect()
         SIMCOM7000E.serial_disconnect(modem)
         GPIO.cleanup()
-        print("killing everything  and kiscica elmaszott a peloba rakot keresni💀")
+        print("killing everything💀")
 
 
 if __name__ == "__main__":
