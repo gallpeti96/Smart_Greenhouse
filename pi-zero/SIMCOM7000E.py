@@ -47,6 +47,8 @@ def set_CFUN(ser, input):
 def get_conn_status(ser):
     return send_at(ser, 'AT+CGATT?', 'OK', 0.5)
 
+def get_CSQ(ser):
+    return send_at(ser, 'AT+CSQ', 'OK', 0.5)
 
 def gnss_poweron(ser):
     send_at(ser, 'AT+CGNSPWR=1', 'OK')
