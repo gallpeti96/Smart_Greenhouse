@@ -37,7 +37,7 @@ except:
     sys.exit(0)
 
 GPIO.setmode(GPIO.BCM)
-relay_GPIO = 26
+relay_GPIO = 16
 GPIO.setup(relay_GPIO, GPIO.OUT)
 measurement_interval = 1
 sensorId = 1
@@ -132,17 +132,20 @@ def tsl():
 def power():
     print(colored("INA219 started. . .", 'green'))
     ina219 = INA219(i2c)
-
+    powers = []
     while True:
-        power = round(ina219.power, 4)
+        for i in range(0, 300):
+            powers.append(ina219.power)
+            time.sleep(.1)
+        avg_power_consumption = sum(powers)/len(powers)
         with lock:
-            database.create_record(conn, "Measurements", ("power", power))
-        # client.publish("greenhouse/power", power)
-        # print(power, " Watt")
-        time.sleep(measurement_interval/10)
+            database.create_record(conn, "Measurements", ("power", avg_power_consumption))
+        powers = []
+        # client.publish("greenhouse/power", avg_power_consumption)
+        # print(avg_power_consumption, " Watt/hour")
 
 
-def GPS():
+def powerup_GPS():
     print(colored("GPS positioning started. . .", 'green'))
     SIMCOM7000E.gnss_poweron(modem)
     gps_dict = SIMCOM7000E.get_gnss_data(modem)
@@ -152,14 +155,6 @@ def GPS():
         time.sleep(2)
         gps_dict = SIMCOM7000E.get_gnss_data(modem)
     print("Positioned!")
-    while True:
-        gps_dict = SIMCOM7000E.get_gnss_data(modem)
-        lat, long = gps_dict["Latitude"], gps_dict["Longitude"]
-        position = lat + ", " + long
-        database.create_record(conn, "Measurements", ("gps", position))
-        # client.publish("greenhouse/gps", position)
-        # print(lat, "\t", long)
-        time.sleep(measurement_interval*10)
 
 
 def get_signal_strength():
@@ -210,8 +205,6 @@ def send_msg():
 
     light_dict = {"sensorId": sensorId, "timestamp": [], "value": []}
 
-    pos_dict = {"sensorId": sensorId, "timestamp": [], "value": []}
-
     power_dict = {"sensorId": sensorId, "timestamp": [], "value": []}
 
     last_sent = database.select_last_entry(conn)
@@ -239,9 +232,6 @@ def send_msg():
         elif not_sent[i][2] == 'lux':
             light_dict['timestamp'].append(not_sent[i][1])
             light_dict['value'].append(not_sent[i][3])
-        if not_sent[i][2] == 'pos':
-            pos_dict['timestamp'].append(not_sent[i][1])
-            pos_dict['value'].append(not_sent[i][3])
         if not_sent[i][2] == 'power':
             power_dict['timestamp'].append(not_sent[i][1])
             power_dict['value'].append(not_sent[i][3])
@@ -249,6 +239,15 @@ def send_msg():
     dBm = get_signal_strength()
     client.publish("greenhouse/signal_strength", dBm)
     time.sleep(.2)
+
+    gps_dict = SIMCOM7000E.get_gnss_data(modem)
+    lat, long = gps_dict["Latitude"], gps_dict["Longitude"]
+    if long and lat != 0:
+        position = lat + ", " + long
+        database.create_record(conn, "Measurements", ("gps", position))
+        pos = {"name": "Sector" + str(sensorId), "lat": lat, "lon": long}
+        client.publish("greenhouse/gps", json.dumps(pos))
+
     client.publish("greenhouse/temp_json", json.dumps(temp_dict))
     time.sleep(.2)
     client.publish("greenhouse/humidity_json", json.dumps(humidity_dict))
@@ -261,12 +260,10 @@ def send_msg():
     time.sleep(.2)
     client.publish("greenhouse/lux_json", json.dumps(light_dict))
     time.sleep(.2)
-    client.publish("greenhouse/pos_json", json.dumps(pos_dict))
-    time.sleep(.2)
     client.publish("greenhouse/power_json", json.dumps(power_dict))
 
     print("NB-IoT network signal strength: ", dBm, "dBm")
-    print("Sent:\t", len(temp_dict['timestamp']), "temp", len(humidity_dict['timestamp']), "humi", len(pressure_dict['timestamp']), "pressure", len(gas_dict['timestamp']), "gas", len(light_dict['timestamp']), "light", len(pos_dict['timestamp']), "pos", len(power_dict['timestamp']), "power")
+    print("Sent:\t", len(temp_dict['timestamp']), "temp", len(humidity_dict['timestamp']), "humi", len(pressure_dict['timestamp']), "pressure", len(gas_dict['timestamp']), "gas", len(light_dict['timestamp']), "light",  len(power_dict['timestamp']), "power")
     timestamp = time.time()
     start = time.time()
     with lock:
@@ -278,6 +275,7 @@ def send_msg():
 def connect_to_network_and_send(sleep_sec):
     print(colored("Communication thread started. . .", 'green'))
     while True:
+        # back = SIMCOM7000E.set_CFUN(modem, '0')
         back = SIMCOM7000E.set_CFUN(modem, '1')
         print(back)
         connected = 0
@@ -339,24 +337,26 @@ def connect_to_network_and_send(sleep_sec):
         output, error = process.communicate()
         time.sleep(2)
         print(colored("PPP stopped", 'yellow'))
-        back = SIMCOM7000E.set_CFUN(modem, '0')
+        # back = SIMCOM7000E.set_CGATT(modem, '0')
         print(back)
-        print(colored("Going to aluggyal for: " + str(sleep_sec) + "seconds", 'magenta'))
+        print(colored("Detached from network.", "yellow"))
+        print(colored("Going to sleep for: " + str(sleep_sec) + "seconds", 'magenta'))
         time.sleep(sleep_sec)
 
 
 def main():
     print(colored("STARTING....", 'green'))
     try:
+        sensor3 = threading.Thread(target=powerup_GPS())
+        sensor3.name = 'powerup_GPS'
+        sensor3.daemon = True
+
         sensor1 = threading.Thread(target=bme680)
         sensor1.name = "bme680"
         sensor1.daemon = True
         sensor2 = threading.Thread(target=tsl)
         sensor2.name = 'tsl'
         sensor2.daemon = True
-        sensor3 = threading.Thread(target=GPS)
-        sensor3.name = 'GPS'
-        sensor3.daemon = True
         sensor4 = threading.Thread(target=power)
         sensor4.name = 'power'
         sensor4.daemon = True
@@ -369,12 +369,13 @@ def main():
         connect_and_send.name = 'Communication'
         connect_and_send.daemon = True
 
+        sensor3.start()
+        time.sleep(.1)
+
         sensor1.start()
         time.sleep(.1)
         sensor2.start()
         time.sleep(.1)
-        # sensor3.start()
-        # time.sleep(.1)
         sensor4.start()
         # rel.start()
         connect_and_send.start()
@@ -411,6 +412,11 @@ def main():
     except KeyboardInterrupt:
         client.unsubscribe("greenhouse/relay")
         client.disconnect()
+
+        bashCommand = "sudo poff"
+        process = subprocess.Popen(bashCommand.split(), stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+        output, error = process.communicate()
+
         SIMCOM7000E.serial_disconnect(modem)
         GPIO.cleanup()
         print("killing everything💀")

@@ -44,6 +44,10 @@ def set_CFUN(ser, input):
     return send_at(ser, 'AT+CFUN='+input, 'OK', 3.0)
 
 
+def set_CGATT(ser, input):
+    return send_at(ser, 'AT+CGATT='+input, 'OK', 5.0)
+
+
 def get_conn_status(ser):
     return send_at(ser, 'AT+CGATT?', 'OK', 0.5)
 
