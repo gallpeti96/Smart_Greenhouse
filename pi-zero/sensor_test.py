@@ -16,7 +16,7 @@ import json
 import subprocess
 from termcolor import colored
 
-client = mqtt.Client("test")
+client = mqtt.Client(client_id="RPi0_1")
 # if "ppp0" in ni.interfaces():
 #     ip = ni.ifaddresses('ppp0')[ni.AF_INET][0]['addr']                              # nb-iot modemen át
 #     client.connect("152.66.248.149", port=51883, keepalive=600, bind_address=ip)
@@ -37,8 +37,8 @@ except:
     sys.exit(0)
 
 GPIO.setmode(GPIO.BCM)
-relay_GPIO = 16
-GPIO.setup(relay_GPIO, GPIO.OUT)
+pump_GPIO = 16
+GPIO.setup(pump_GPIO, GPIO.OUT)
 measurement_interval = 1
 sensorId = 1
 lock = threading.Lock()
@@ -54,7 +54,7 @@ def gas_warmup(bme680, warmup_time):
         curr_time = time.time()
         gas = bme680.gas
         burn_in_data.append(gas)
-        print('Gas: {0} Ohms'.format(gas))
+        #print('Gas: {0} Ohms'.format(gas))
         time.sleep(1)
     gas_baseline = sum(burn_in_data[-50:]) / 50.0
     hum_baseline = 40.0
@@ -129,9 +129,51 @@ def tsl():
         time.sleep(measurement_interval)
 
 
+def soil_moisture():
+    print(colored("Soil moisture started. . .", 'green'))
+
+    data = 0
+
+    def tick(clk, ts):
+        time.sleep(0.00005 * ts)
+        GPIO.output(clk, GPIO.HIGH)
+        time.sleep(0.00005 * ts)
+        GPIO.output(clk, GPIO.LOW)
+
+    csPIN = 18
+    clkPIN = 24
+    dinPIN = 23
+
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(csPIN, GPIO.OUT, initial=GPIO.HIGH)
+    GPIO.setup(clkPIN, GPIO.OUT, initial=GPIO.LOW)
+    # security offset
+    ts = 1.05
+    prev = data
+    GPIO.setup(dinPIN, GPIO.IN)
+    GPIO.output(csPIN, GPIO.LOW)
+    sum = 0
+    while True:
+        GPIO.output(csPIN, GPIO.LOW)
+        tick(clkPIN, ts)
+        for i in range(8):
+            tick(clkPIN, ts)
+            data = (data << 1) | GPIO.input(dinPIN)
+        GPIO.output(csPIN, GPIO.HIGH)
+        moisturePercent = (255 - data) / 255 * 100
+        #print(data, '\t', '{:3f}'.format(moisturePercent))
+        #if not prev == data:
+            #print(data, '\t', '{:3f}'.format(moisturePercent))
+        prev = data
+        with lock:
+            database.create_record(conn, "Measurements", ("moisture", moisturePercent))
+        data = 0
+        time.sleep(measurement_interval)
+
+
 def power():
     print(colored("INA219 started. . .", 'green'))
-    ina219 = INA219(i2c)
+    ina219 = INA219(i2c, addr=0x41)
     powers = []
     while True:
         for i in range(0, 300):
@@ -175,19 +217,19 @@ def get_signal_strength():
 
 
 def get_action():
-    client.subscribe("greenhouse/relay")
-    print(colored("Subscripted to topic: " + "greenhouse/relay" , 'green'))
+    client.subscribe("greenhouse/pump")
+    print(colored("Subscripted to topic: " + "greenhouse/pump", 'green'))
 
     def on_message(client, userdata, message):
         print("message received ", str(message.payload.decode("utf-8")))
         print("message topic=", message.topic)
         action = str(message.payload.decode("utf-8"))
         topic = message.topic
-        if topic == "greenhouse/relay":
+        if topic == "greenhouse/pump":
             if action == "0":
-                GPIO.output(relay_GPIO, GPIO.LOW)
+                GPIO.output(pump_GPIO, GPIO.LOW)
             else:
-                GPIO.output(relay_GPIO, GPIO.HIGH)
+                GPIO.output(pump_GPIO, GPIO.HIGH)
 
     client.on_message = on_message
 
@@ -204,6 +246,8 @@ def send_msg():
     gas_dict = {"sensorId": sensorId, "timestamp": [], "value": []}
 
     light_dict = {"sensorId": sensorId, "timestamp": [], "value": []}
+
+    moisture_dict = {"sensorId": sensorId, "timestamp": [], "value": []}
 
     power_dict = {"sensorId": sensorId, "timestamp": [], "value": []}
 
@@ -232,6 +276,9 @@ def send_msg():
         elif not_sent[i][2] == 'lux':
             light_dict['timestamp'].append(not_sent[i][1])
             light_dict['value'].append(not_sent[i][3])
+        elif not_sent[i][2] == 'moisture':
+            moisture_dict['timestamp'].append(not_sent[i][1])
+            moisture_dict['value'].append(not_sent[i][3])
         if not_sent[i][2] == 'power':
             power_dict['timestamp'].append(not_sent[i][1])
             power_dict['value'].append(not_sent[i][3])
@@ -248,6 +295,8 @@ def send_msg():
         pos = {"name": "Sector" + str(sensorId), "lat": lat, "lon": long}
         client.publish("greenhouse/gps", json.dumps(pos))
 
+    client.publish("test", "hahaha")
+    print("hahaha to test")
     client.publish("greenhouse/temp_json", json.dumps(temp_dict))
     time.sleep(.2)
     client.publish("greenhouse/humidity_json", json.dumps(humidity_dict))
@@ -260,10 +309,12 @@ def send_msg():
     time.sleep(.2)
     client.publish("greenhouse/lux_json", json.dumps(light_dict))
     time.sleep(.2)
+    client.publish("greenhouse/moisture_json", json.dumps(moisture_dict))
+    time.sleep(.2)
     client.publish("greenhouse/power_json", json.dumps(power_dict))
 
     print("NB-IoT network signal strength: ", dBm, "dBm")
-    print("Sent:\t", len(temp_dict['timestamp']), "temp", len(humidity_dict['timestamp']), "humi", len(pressure_dict['timestamp']), "pressure", len(gas_dict['timestamp']), "gas", len(light_dict['timestamp']), "light",  len(power_dict['timestamp']), "power")
+    print("Sent:\t", len(temp_dict['timestamp']), "temp", len(humidity_dict['timestamp']), "humi", len(pressure_dict['timestamp']), "pressure", len(gas_dict['timestamp']), "gas", len(light_dict['timestamp']), "light", len(moisture_dict['timestamp']), "moisture",  len(power_dict['timestamp']), "power")
     timestamp = time.time()
     start = time.time()
     with lock:
@@ -284,7 +335,7 @@ def connect_to_network_and_send(sleep_sec):
             time.sleep(.1)
             back = SIMCOM7000E.get_conn_status(modem)
             # print(back)
-            if '1' in back:
+            if '1' in str(back):
                 connected = 1
                 print("\rTried to connect to network:", try_number+1, "times")
                 print("connected to network")
@@ -321,15 +372,17 @@ def connect_to_network_and_send(sleep_sec):
             print(colored("Connected to NB-IoT network", 'green', attrs=['bold']))
         time.sleep(1)
         ip = ni.ifaddresses('ppp0')[ni.AF_INET][0]['addr']  # nb-iot modemen át
-        client.connect("152.66.248.149", port=51883, keepalive=60, bind_address=ip)
+        print(ip)
+        eredmeny = client.connect("gall-peter96.asuscomm.com", port=51883)#, bind_address=ip)
+        print(eredmeny)
         client.loop_start()
         get_action()
         print("connected using NB-IoT")
         send_msg()
         print("Waiting for action. . .")
-        time.sleep(15)
+        time.sleep(30)
 
-        client.unsubscribe("greenhouse/relay")
+        client.unsubscribe("greenhouse/pump")
         client.loop_stop()
         client.disconnect()
         bashCommand = "sudo poff"
@@ -357,12 +410,15 @@ def main():
         sensor2 = threading.Thread(target=tsl)
         sensor2.name = 'tsl'
         sensor2.daemon = True
+        sensor5 = threading.Thread(target=soil_moisture)
+        sensor5.name = 'moisture'
+        sensor5.daemon = True
         sensor4 = threading.Thread(target=power)
         sensor4.name = 'power'
         sensor4.daemon = True
 
         rel = threading.Thread(target=get_action)
-        rel.name = 'relay'
+        rel.name = 'pump'
         rel.daemon = True
 
         connect_and_send = threading.Thread(target=connect_to_network_and_send, args=(30,))
@@ -377,6 +433,8 @@ def main():
         sensor2.start()
         time.sleep(.1)
         sensor4.start()
+        sensor5.start()
+        time.sleep(.1)
         # rel.start()
         connect_and_send.start()
         while True:
@@ -400,6 +458,13 @@ def main():
                 sensor4.name = 'power'
                 sensor4.daemon = True
                 sensor4.start()
+            elif not sensor5.is_alive():
+                sensor5 = None
+                sensor5 = threading.Thread(target=soil_moisture)
+                sensor5.name = 'moisture'
+                sensor5.daemon = True
+                sensor5.start()
+
             elif not connect_and_send.is_alive():
                 print('restarting communication thread')
                 connect_and_send = None
@@ -410,7 +475,7 @@ def main():
                 connect_and_send.start()
 
     except KeyboardInterrupt:
-        client.unsubscribe("greenhouse/relay")
+        client.unsubscribe("greenhouse/pump")
         client.disconnect()
 
         bashCommand = "sudo poff"
