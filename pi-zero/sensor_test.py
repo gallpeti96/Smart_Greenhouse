@@ -8,6 +8,8 @@ from busio import I2C
 import adafruit_bme680
 import adafruit_tsl2591
 from adafruit_ina219 import ADCResolution, BusVoltageRange, INA219
+import adafruit_si7021
+
 import paho.mqtt.client as mqtt
 import netifaces as ni
 import RPi.GPIO as GPIO
@@ -18,7 +20,7 @@ from termcolor import colored
 
 client = mqtt.Client(client_id="RPi0_1")
 # if "ppp0" in ni.interfaces():
-#     ip = ni.ifaddresses('ppp0')[ni.AF_INET][0]['addr']                              # nb-iot modemen át
+#     ip = ni.ifaddresses('ppp0')[ni.AF_INET][0]['addr']                              # nb-iot modemen at
 #     client.connect("152.66.248.149", port=51883, keepalive=600, bind_address=ip)
 #     client.loop_start()
 #     print("connected using NB-IoT")
@@ -37,10 +39,28 @@ except:
     sys.exit(0)
 
 GPIO.setmode(GPIO.BCM)
-pump_GPIO = 16
+pump_GPIO = 20
 GPIO.setup(pump_GPIO, GPIO.OUT)
+GPIO.output(pump_GPIO, GPIO.HIGH)
+
+vent_GPIO = 16
+GPIO.setup(vent_GPIO, GPIO.OUT)
+GPIO.output(vent_GPIO, GPIO.HIGH)
+
+Rled_GPIO = 0
+GPIO.setup(Rled_GPIO, GPIO.OUT)
+#GPIO.output(Rled_GPIO, GPIO.HIGH)
+
+Gled_GPIO = 0
+GPIO.setup(Gled_GPIO, GPIO.OUT)
+#GPIO.output(Gled_GPIO, GPIO.HIGH)
+
+Bled_GPIO = 0
+GPIO.setup(Bled_GPIO, GPIO.OUT)
+#GPIO.output(Bled_GPIO, GPIO.HIGH)
+
 measurement_interval = 1
-sensorId = 1
+sectorId = 2
 lock = threading.Lock()
 
 
@@ -114,6 +134,18 @@ def bme680():
             # client.publish("greenhouse/gas", air_quality_score)
 
             # print(temp, "°C, ", hum, "%, ", pressure, "hPa, ", altitude, "m, ", air_quality_score)
+        time.sleep(measurement_interval)
+
+
+def si7021():
+    print(colored("SI7021 started. . .", 'green'))
+    si7021 = adafruit_si7021.SI7021(i2c)
+    while True:
+        temp = si7021.temperature
+        humidity = si7021.relative_humidity
+        with lock:
+            database.create_record(conn, "Measurements", ("temp", temp))
+            database.create_record(conn, "Measurements", ("humidity", humidity))
         time.sleep(measurement_interval)
 
 
@@ -217,39 +249,54 @@ def get_signal_strength():
 
 
 def get_action():
-    client.subscribe("greenhouse/pump")
-    print(colored("Subscripted to topic: " + "greenhouse/pump", 'green'))
+    client.subscribe("greenhouse/pump"+str(sectorId))
+    print(colored("Subscripted to topic: " + "greenhouse/pump"+str(sectorId), 'green'))
+    client.subscribe("greenhouse/vent"+str(sectorId))
+    print(colored("Subscripted to topic: " + "greenhouse/vent"+str(sectorId), 'green'))
+    client.subscribe("greenhouse/light1"+str(sectorId))
+    print(colored("Subscripted to topic: " + "greenhouse/light1"+str(sectorId), 'green'))
+    client.subscribe("greenhouse/light2"+str(sectorId))
+    print(colored("Subscripted to topic: " + "greenhouse/light2"+str(sectorId), 'green'))
+
 
     def on_message(client, userdata, message):
         print("message received ", str(message.payload.decode("utf-8")))
         print("message topic=", message.topic)
         action = str(message.payload.decode("utf-8"))
         topic = message.topic
-        if topic == "greenhouse/pump":
+        if topic == "greenhouse/pump"+str(sectorId):
             if action == "0":
-                GPIO.output(pump_GPIO, GPIO.LOW)
-            else:
                 GPIO.output(pump_GPIO, GPIO.HIGH)
-
+            else:
+                GPIO.output(pump_GPIO, GPIO.LOW)
+        if topic == "greenhouse/vent"+str(sectorId):
+            if action == "0":
+                GPIO.output(vent_GPIO, GPIO.HIGH)
+            else:
+                GPIO.output(vent_GPIO, GPIO.LOW)
+        if topic == "greenhouse/light1":
+            print("light1")
+        if topic == "greenhouse/light2":
+            print("light2")
     client.on_message = on_message
 
 
 def send_msg():
-    temp_dict = {"sensorId": sensorId, "timestamp": [], "value": []}
+    temp_dict = {"sensorId": sectorId, "timestamp": [], "value": []}
 
-    humidity_dict = {"sensorId": sensorId, "timestamp": [], "value": []}
+    humidity_dict = {"sensorId": sectorId, "timestamp": [], "value": []}
 
-    pressure_dict = {"sensorId": sensorId, "timestamp": [], "value": []}
+    pressure_dict = {"sensorId": sectorId, "timestamp": [], "value": []}
 
-    altitude_dict = {"sensorId": sensorId, "timestamp": [], "value": []}
+    altitude_dict = {"sensorId": sectorId, "timestamp": [], "value": []}
 
-    gas_dict = {"sensorId": sensorId, "timestamp": [], "value": []}
+    gas_dict = {"sensorId": sectorId, "timestamp": [], "value": []}
 
-    light_dict = {"sensorId": sensorId, "timestamp": [], "value": []}
+    light_dict = {"sensorId": sectorId, "timestamp": [], "value": []}
 
-    moisture_dict = {"sensorId": sensorId, "timestamp": [], "value": []}
+    moisture_dict = {"sensorId": sectorId, "timestamp": [], "value": []}
 
-    power_dict = {"sensorId": sensorId, "timestamp": [], "value": []}
+    power_dict = {"sensorId": sectorId, "timestamp": [], "value": []}
 
     last_sent = database.select_last_entry(conn)
     if last_sent[0][0] is None:
@@ -284,7 +331,7 @@ def send_msg():
             power_dict['value'].append(not_sent[i][3])
 
     dBm = get_signal_strength()
-    client.publish("greenhouse/signal_strength", dBm)
+    client.publish("greenhouse/signal_strength"+str(sectorId), dBm)
     time.sleep(.2)
 
     gps_dict = SIMCOM7000E.get_gnss_data(modem)
@@ -292,26 +339,26 @@ def send_msg():
     if long and lat != 0:
         position = lat + ", " + long
         database.create_record(conn, "Measurements", ("gps", position))
-        pos = {"name": "Sector" + str(sensorId), "lat": lat, "lon": long}
+        pos = {"name": "Sector" + str(sectorId), "lat": lat, "lon": long}
         client.publish("greenhouse/gps", json.dumps(pos))
 
     client.publish("test", "hahaha")
     print("hahaha to test")
-    client.publish("greenhouse/temp_json", json.dumps(temp_dict))
+    client.publish("greenhouse/temp_json"+str(sectorId), json.dumps(temp_dict))
     time.sleep(.2)
-    client.publish("greenhouse/humidity_json", json.dumps(humidity_dict))
+    client.publish("greenhouse/humidity_json"+str(sectorId), json.dumps(humidity_dict))
     time.sleep(.2)
-    client.publish("greenhouse/pressure_json", json.dumps(pressure_dict))
+    client.publish("greenhouse/pressure_json"+str(sectorId), json.dumps(pressure_dict))
     time.sleep(.2)
-    client.publish("greenhouse/altitude_json", json.dumps(altitude_dict))
+    client.publish("greenhouse/altitude_json"+str(sectorId), json.dumps(altitude_dict))
     time.sleep(.2)
-    client.publish("greenhouse/gas_json", json.dumps(gas_dict))
+    client.publish("greenhouse/gas_json"+str(sectorId), json.dumps(gas_dict))
     time.sleep(.2)
-    client.publish("greenhouse/lux_json", json.dumps(light_dict))
+    client.publish("greenhouse/lux_json"+str(sectorId), json.dumps(light_dict))
     time.sleep(.2)
-    client.publish("greenhouse/moisture_json", json.dumps(moisture_dict))
+    client.publish("greenhouse/moisture_json"+str(sectorId), json.dumps(moisture_dict))
     time.sleep(.2)
-    client.publish("greenhouse/power_json", json.dumps(power_dict))
+    client.publish("greenhouse/power_json"+str(sectorId), json.dumps(power_dict))
 
     print("NB-IoT network signal strength: ", dBm, "dBm")
     print("Sent:\t", len(temp_dict['timestamp']), "temp", len(humidity_dict['timestamp']), "humi", len(pressure_dict['timestamp']), "pressure", len(gas_dict['timestamp']), "gas", len(light_dict['timestamp']), "light", len(moisture_dict['timestamp']), "moisture",  len(power_dict['timestamp']), "power")
@@ -342,7 +389,7 @@ def connect_to_network_and_send(sleep_sec):
             else:
                 try_number += 1
                 print("\rTried to connect to network:", try_number, "times", end="")
-            if try_number == 30:
+            if try_number == 60:
                 print(colored("cannot connect to the network, restarting communication thread", 'red'))
                 back = SIMCOM7000E.set_CFUN(modem, '0')
                 print(back)
@@ -373,7 +420,7 @@ def connect_to_network_and_send(sleep_sec):
         time.sleep(1)
         ip = ni.ifaddresses('ppp0')[ni.AF_INET][0]['addr']  # nb-iot modemen át
         print(ip)
-        eredmeny = client.connect("gall-peter96.asuscomm.com", port=51883)#, bind_address=ip)
+        eredmeny = client.connect("gall-peter96.asuscomm.com", port=51883, bind_address=ip)
         print(eredmeny)
         client.loop_start()
         get_action()
@@ -382,7 +429,7 @@ def connect_to_network_and_send(sleep_sec):
         print("Waiting for action. . .")
         time.sleep(30)
 
-        client.unsubscribe("greenhouse/pump")
+        client.unsubscribe("greenhouse/pump"+str(sectorId))
         client.loop_stop()
         client.disconnect()
         bashCommand = "sudo poff"
@@ -400,12 +447,15 @@ def connect_to_network_and_send(sleep_sec):
 def main():
     print(colored("STARTING....", 'green'))
     try:
-        sensor3 = threading.Thread(target=powerup_GPS())
-        sensor3.name = 'powerup_GPS'
-        sensor3.daemon = True
+        #sensor3 = threading.Thread(target=powerup_GPS())
+        #sensor3.name = 'powerup_GPS'
+        #sensor3.daemon = True
 
-        sensor1 = threading.Thread(target=bme680)
-        sensor1.name = "bme680"
+        #sensor1 = threading.Thread(target=bme680)
+        #sensor1.name = "bme680"
+        #sensor1.daemon = True
+        sensor1 = threading.Thread(target=si7021)
+        sensor1.name = "si7021"
         sensor1.daemon = True
         sensor2 = threading.Thread(target=tsl)
         sensor2.name = 'tsl'
@@ -425,7 +475,7 @@ def main():
         connect_and_send.name = 'Communication'
         connect_and_send.daemon = True
 
-        sensor3.start()
+        #sensor3.start()
         time.sleep(.1)
 
         sensor1.start()
@@ -442,8 +492,8 @@ def main():
 
             if not sensor1.is_alive():
                 sensor1 = None
-                sensor1 = threading.Thread(target=bme680)
-                sensor1.name = "bme680"
+                sensor1 = threading.Thread(target=si7021)
+                sensor1.name = "si7021"
                 sensor1.daemon = True
                 sensor1.start()
             elif not sensor2.is_alive():
